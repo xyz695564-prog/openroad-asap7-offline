@@ -1,0 +1,59 @@
+name: Build OpenROAD + ASAP7 Offline Image
+
+on:
+  workflow_dispatch:   # 手动触发，便于控制
+
+jobs:
+  build-and-export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate ASAP7 zip file
+        id: find_zip
+        run: |
+          ZIP=$(find . -maxdepth 1 -name "*.zip" | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "❌ 仓库根目录下没有找到 ZIP 文件"
+            exit 1
+          fi
+          echo "找到压缩包: $ZIP"
+          echo "zip_file=$ZIP" >> $GITHUB_OUTPUT
+
+      - name: Unzip ASAP7 into build context
+        run: |
+          mkdir -p build-context/asap7
+          # Ubuntu-latest 默认预装了 unzip，无需额外安装
+          unzip -q "${{ steps.find_zip.outputs.zip_file }}" -d build-context/asap7
+          echo "解压后目录结构:"
+          ls -la build-context/asap7/
+
+      - name: Pull OpenROAD base image
+        run: docker pull openroad/centos7-dev:latest
+
+      - name: Build image with ASAP7 integrated
+        run: |
+          # 在 build-context 目录下创建 Dockerfile，将解压好的 ASAP7 复制进镜像
+          cat > build-context/Dockerfile <<'EOF'
+          FROM openroad/centos7-dev:latest
+          # 将解压后的 ASAP7 内容复制到镜像内的 /opt/asap7
+          COPY asap7/ /opt/asap7/
+          ENV ASAP7_PDK_ROOT=/opt/asap7
+          EOF
+
+          docker build -t openroad-asap7:latest build-context/
+
+      - name: Save image as compressed tar
+        run: |
+          mkdir -p artifacts
+          docker save openroad-asap7:latest | gzip > artifacts/openroad-asap7.tar.gz
+          ls -lh artifacts/openroad-asap7.tar.gz
+
+      - name: Upload offline image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openroad-asap7-offline-image
+          path: artifacts/openroad-asap7.tar.gz
+          retention-days: 7
